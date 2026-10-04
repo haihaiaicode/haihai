@@ -755,8 +755,8 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("🎙 会议语音转文字工具")
-        self.root.geometry("880x720")
-        self.root.minsize(680, 520)
+        self.root.geometry("980x780")
+        self.root.minsize(760, 600)
         self.root.configure(bg=BG_MAIN)
 
         # -- 状态 --
@@ -838,6 +838,21 @@ class App:
         # ── 主容器 ──
         main_frame = tk.Frame(self.root, bg=BG_MAIN)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        # Compact brand header matching the web app's visual hierarchy.
+        header = tk.Frame(main_frame, bg=BG_MAIN)
+        header.pack(fill=tk.X, pady=(0, 14))
+        mark = tk.Label(header, text="▤", bg=ACCENT, fg=BG_DEEP,
+                        font=("Segoe UI", 18, "bold"), width=2, pady=4)
+        mark.pack(side=tk.LEFT, padx=(0, 10))
+        title_box = tk.Frame(header, bg=BG_MAIN)
+        title_box.pack(side=tk.LEFT)
+        tk.Label(title_box, text="会议记录工具", bg=BG_MAIN,
+                 fg=TEXT_PRIMARY, font=("Microsoft YaHei", 17, "bold")).pack(anchor="w")
+        tk.Label(title_box, text="系统音频实时转写 · Windows Desktop",
+                 bg=BG_MAIN, fg=TEXT_MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+        tk.Label(header, text="WASAPI LOOPBACK", bg="#103544", fg="#8eeaf0",
+                 font=("Segoe UI", 9, "bold"), padx=9, pady=5).pack(side=tk.RIGHT)
 
         # ═══ 设备设置卡片 ═══
         card_dev = ttk.LabelFrame(main_frame, text=" 音频设置 ",
