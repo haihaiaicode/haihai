@@ -1,3 +1,4 @@
+#pragma codepage 65001
 #define AppName "会议记录工具"
 #define AppVersion "1.0.0"
 #define AppPublisher "haihaiaicode"
@@ -20,7 +21,6 @@ ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
 Source: "dist\MeetingRecorder.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "README.md"; DestDir: "{app}"; Flags: isreadme
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
