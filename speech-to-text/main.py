@@ -769,8 +769,10 @@ class App:
         self.segment_count = 0
 
         # -- 队列 --
-        self.audio_q = queue.Queue(maxsize=256)
+        # Keep captured audio queued while Whisper catches up; never silently drop it.
+        self.audio_q = queue.Queue()
         self.result_q = queue.Queue()
+        self.transcribe_q = queue.Queue()
 
         # -- 缓冲 --
         self.speech_buf = deque()
@@ -778,7 +780,9 @@ class App:
         self.transcriber = Transcriber()
 
         # -- 转录并发控制 --
-        self._transcribe_sem = threading.Semaphore(MAX_TRANSCRIBE_WORKERS)
+        self._finalize_pending = False
+        self._transcribe_thread = threading.Thread(target=self._transcribe_loop, daemon=True)
+        self._transcribe_thread.start()
 
         # -- 结果 --
         self.full_text = ""
@@ -1295,16 +1299,14 @@ class App:
 
         # 等处理线程
         if self._proc_thread and self._proc_thread.is_alive():
-            self._proc_thread.join(timeout=3)
+            self._proc_thread.join(timeout=10)
 
         # 处理残余
         if self.speech_buf:
             self._flush_buffer()
 
         # 等一下最后的转录完成
-        time.sleep(0.5)
-
-        self._save_final()
+        self._finalize_pending = True
 
         self.btn_start.config(state="normal", bg=BTN_PRIMARY)
         self.btn_pause.config(state="disabled", text="⏸  暂停",
@@ -1329,12 +1331,12 @@ class App:
         if self.paused:
             return
         try:
-            self.audio_q.put_nowait(indata[:, 0].copy())
+            self.audio_q.put(indata[:, 0].copy())
         except queue.Full:
             pass  # 丢弃旧数据，防止积压
 
     def _process_loop(self):
-        while not self._stop_flag.is_set():
+        while not self._stop_flag.is_set() or not self.audio_q.empty():
             try:
                 chunk = self.audio_q.get(timeout=0.4)
             except queue.Empty:
@@ -1353,6 +1355,9 @@ class App:
             dur = sum(len(c) for c in self.speech_buf) / self.audio_sr
             if dur >= CHUNK_DURATION:
                 self._flush_buffer(reason="chunk")
+
+        if self.speech_buf:
+            self._flush_buffer(reason="stop")
 
     def _flush_buffer(self, reason="pause"):
         if not self.speech_buf:
@@ -1378,14 +1383,18 @@ class App:
         lang = "zh" if "zh" in lang_raw else ("en" if "en" in lang_raw else "auto")
 
         # 控制并发数
-        if not self._transcribe_sem.acquire(blocking=False):
+        if self.transcribe_q is None:
             return  # 太忙则跳过
 
-        threading.Thread(
-            target=self._do_transcribe,
-            args=(audio_16k.copy(), lang, time.time(), reason),
-            daemon=True
-        ).start()
+        self.transcribe_q.put((audio_16k.copy(), lang, time.time(), reason))
+
+    def _transcribe_loop(self):
+        while True:
+            audio, lang, cap_time, reason = self.transcribe_q.get()
+            try:
+                self._do_transcribe(audio, lang, cap_time, reason)
+            finally:
+                self.transcribe_q.task_done()
 
     def _do_transcribe(self, audio, lang, cap_time, reason="pause"):
         try:
@@ -1394,9 +1403,8 @@ class App:
                 self.result_q.put(("err", err, cap_time))
             elif text:
                 self.result_q.put(("text", text, cap_time, reason))
-        finally:
-            self._transcribe_sem.release()
-
+        except Exception as e:
+            self.result_q.put(("err", str(e), cap_time))
     # ==================== 结果输出 ====================
     def _poll_results(self):
         try:
@@ -1423,6 +1431,11 @@ class App:
                     self._log(f"⚠️ 识别出错: {content}", "system")
         except queue.Empty:
             pass
+        if (self._finalize_pending and self.transcribe_q.unfinished_tasks == 0
+                and self.result_q.empty()
+                and (not self._proc_thread or not self._proc_thread.is_alive())):
+            self._save_final()
+            self._finalize_pending = False
         self.root.after(200, self._poll_results)
 
     def _write_line(self, ts, text):

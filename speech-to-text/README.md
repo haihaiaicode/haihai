@@ -26,6 +26,10 @@ python -m http.server 8080
 
 `main.py` 和 `run.bat` 是原来的 Windows + Whisper 离线版本，需要 Python、麦克风和模型文件；它们不会在 GitHub Pages 上运行。
 
+桌面版用于捕捉电脑播放的声音。打开后，在音频设备中选择带有“系统音频（WASAPI 环回）”标记的设备，再点击开始记录。首次运行会下载 Whisper 模型，模型较大，请保持网络连接。
+
+项目的 GitHub Actions 会在更新桌面版代码后自动生成 `MeetingRecorder-Windows.zip`。在仓库的 **Actions → Build Windows desktop app** 中打开最近一次运行，从 **Artifacts** 下载压缩包。后续可以将它附加到 GitHub Releases，作为网站的正式下载文件。
+
 ## 发布到 GitHub Pages
 
 仓库设置中的 Pages 选择 `GitHub Actions` 即可。项目自带 `.github/workflows/pages.yml`，推送后会自动部署 `speech-to-text` 目录。

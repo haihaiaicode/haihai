@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark">▤</span><div><strong>会议记录工具</strong><small>Browser meeting notes · v1.1</small></div><span style="margin-left:12px;padding:4px 8px;border:1px solid #2d7c92;border-radius:999px;color:#8eeaf0;background:#103544;font-size:11px;font-weight:700;white-space:nowrap">更新测试 v1.2</span></div>
-    <div class="top-actions"><button class="button subtle" id="importBtn">导入记录</button><button class="button primary" id="newBtn">＋ 新建会议</button><input id="importFile" type="file" accept="application/json" hidden></div>
+    <div class="top-actions"><a class="button subtle" href="https://github.com/haihaiaicode/haihai/releases" target="_blank" rel="noreferrer">下载 Windows 版</a><button class="button subtle" id="importBtn">导入记录</button><button class="button primary" id="newBtn">＋ 新建会议</button><input id="importFile" type="file" accept="application/json" hidden></div>
   </header>
 
   <main class="layout">
@@ -18,7 +18,7 @@
       <div class="page-heading"><div><p class="eyebrow">LIVE TRANSCRIPTION</p><h1 id="meetingTitle" contenteditable="true" spellcheck="false">未命名会议</h1><p class="hint">点击标题可以修改会议名称</p></div><span class="status-pill idle" id="statusPill"><i></i><span id="statusText">准备就绪</span></span></div>
       <div class="timer" id="timer">00:00:00</div>
       <div class="controls"><button class="button primary large" id="startBtn">● 开始记录</button><button class="button warning large" id="pauseBtn" disabled>Ⅱ 暂停</button><button class="button danger large" id="stopBtn" disabled>■ 结束并保存</button></div>
-      <div class="notice" id="browserNotice">首次使用时，浏览器会请求麦克风权限。推荐使用最新版 Chrome 或 Edge。</div>
+      <div class="notice" id="browserNotice"><strong>重要：</strong>此网页只识别麦克风声音，不捕捉电脑扬声器/系统播放声音。要记录电脑发出的声音，请使用 Windows 桌面版 <code>run.bat</code>，并选择“系统音频（WASAPI 环回）”。网页麦克风识别还依赖浏览器和网络，可能中断。</div>
       <div class="transcript-panel"><div class="panel-heading"><div><h2>实时文字</h2><span id="wordCount">0 字</span></div><button class="icon-button" id="clearTextBtn" title="清空当前文字">⌫</button></div><div class="transcript" id="transcript"><div class="empty-state"><span>◌</span><p>点击“开始记录”，这里会显示实时转写内容</p></div></div></div>
     </section>
 
