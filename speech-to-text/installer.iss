@@ -1,6 +1,6 @@
 #pragma codepage 65001
 #define AppName "会议记录工具"
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.3"
 #define AppPublisher "haihaiaicode"
 #define AppExeName "MeetingRecorder.exe"
 

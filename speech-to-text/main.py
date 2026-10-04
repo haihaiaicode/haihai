@@ -9,7 +9,12 @@ import os
 import sys
 
 # ---- 模型下载到 D 盘 + 使用国内镜像（解决网络问题）----
-_HF_DIR = r"D:\ai-models\huggingface"
+_HF_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+    "MeetingRecorder", "huggingface",
+)
+if os.path.isdir(r"D:\ai-models\huggingface"):
+    _HF_DIR = r"D:\ai-models\huggingface"
 if not os.environ.get("HF_HOME"):
     os.environ["HF_HOME"] = _HF_DIR
     os.environ["HF_HUB_CACHE"] = os.path.join(_HF_DIR, "hub")
