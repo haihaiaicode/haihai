@@ -758,6 +758,7 @@ class App:
         self.root.geometry("980x780")
         self.root.minsize(760, 600)
         self.root.configure(bg=BG_MAIN)
+        self.root.title("会议记录工具 · System Audio Control Room")
 
         # -- 状态 --
         self.recording = False
@@ -801,7 +802,7 @@ class App:
         self._setup_styles()
 
         # -- UI --
-        self._build_ui()
+        self._build_ui_v2()
         self._refresh_devices()
         self._poll_results()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1029,6 +1030,170 @@ class App:
 
         self.progress = ttk.Progressbar(footer, mode="indeterminate", length=120)
         # 初始隐藏
+
+    def _build_ui_v2(self):
+        """Modern control-room layout used by the packaged desktop app."""
+        shell = tk.Frame(self.root, bg=BG_MAIN)
+        shell.pack(fill=tk.BOTH, expand=True)
+
+        header = tk.Frame(shell, bg=BG_DEEP, height=76,
+                          highlightbackground=BORDER, highlightthickness=1)
+        header.pack(fill=tk.X)
+        header.pack_propagate(False)
+        mark = tk.Label(header, text="M", bg=ACCENT, fg=BG_DEEP,
+                        font=("Segoe UI", 18, "bold"), width=3, pady=7)
+        mark.pack(side=tk.LEFT, padx=(24, 12), pady=16)
+        brand = tk.Frame(header, bg=BG_DEEP)
+        brand.pack(side=tk.LEFT, pady=13)
+        tk.Label(brand, text="会议记录工具", bg=BG_DEEP, fg=TEXT_PRIMARY,
+                 font=("Microsoft YaHei", 16, "bold")).pack(anchor="w")
+        tk.Label(brand, text="SYSTEM AUDIO TRANSCRIPTION CONTROL ROOM",
+                 bg=BG_DEEP, fg=TEXT_MUTED,
+                 font=("Segoe UI", 8)).pack(anchor="w")
+        badge = tk.Label(header, text="  WASAPI LOOPBACK  ", bg="#103544",
+                         fg="#8eeaf0", font=("Segoe UI", 9, "bold"), pady=5)
+        badge.pack(side=tk.RIGHT, padx=24)
+
+        body = tk.Frame(shell, bg=BG_MAIN)
+        body.pack(fill=tk.BOTH, expand=True, padx=24, pady=20)
+
+        overview = tk.Frame(body, bg=BG_MAIN)
+        overview.pack(fill=tk.X, pady=(0, 14))
+        tk.Label(overview, text="LIVE SESSION", bg=BG_MAIN, fg=ACCENT,
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(overview, text="实时系统音频记录", bg=BG_MAIN, fg=TEXT_PRIMARY,
+                 font=("Microsoft YaHei", 22, "bold")).pack(anchor="w", pady=(2, 0))
+        tk.Label(overview, text="捕捉电脑播放声音，并使用 Whisper 生成会议文字记录",
+                 bg=BG_MAIN, fg=TEXT_MUTED,
+                 font=("Microsoft YaHei", 9)).pack(anchor="w")
+
+        monitor = tk.Frame(body, bg=BG_MAIN)
+        monitor.pack(fill=tk.X, pady=(0, 12))
+        device_card = tk.Frame(monitor, bg=BG_CARD,
+                               highlightbackground=BORDER, highlightthickness=1)
+        device_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+        device_inner = tk.Frame(device_card, bg=BG_CARD)
+        device_inner.pack(fill=tk.BOTH, expand=True, padx=16, pady=13)
+        tk.Label(device_inner, text="AUDIO SOURCE", bg=BG_CARD, fg=ACCENT,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        source_row = tk.Frame(device_inner, bg=BG_CARD)
+        source_row.pack(fill=tk.X, pady=(9, 8))
+        self.cb_device = ttk.Combobox(source_row, state="readonly",
+                                      font=("Microsoft YaHei", 9))
+        self.cb_device.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.cb_device.bind("<<ComboboxSelected>>", lambda e: self._on_device_pick())
+        self.btn_refresh = ttk.Button(source_row, text="刷新设备",
+                                      command=self._refresh_devices)
+        self.btn_refresh.pack(side=tk.LEFT, padx=(8, 0))
+        options = tk.Frame(device_inner, bg=BG_CARD)
+        options.pack(fill=tk.X)
+        tk.Label(options, text="识别语言", bg=BG_CARD, fg=TEXT_SECONDARY,
+                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
+        self.lang_var = tk.StringVar(value="zh")
+        self.cb_lang = ttk.Combobox(options, width=13, textvariable=self.lang_var,
+                                    values=["zh(中文)", "en(英文)", "auto(自动)"],
+                                    state="readonly", font=("Microsoft YaHei", 9))
+        self.cb_lang.pack(side=tk.LEFT, padx=(8, 0))
+        self.status_dot = tk.Canvas(options, width=12, height=12, bg=BG_CARD,
+                                    highlightthickness=0)
+        self.status_dot.pack(side=tk.RIGHT, padx=(8, 0))
+        self._dot = self.status_dot.create_oval(2, 2, 10, 10,
+                                                fill=TEXT_MUTED, outline="")
+        self.status_var = tk.StringVar(value="正在扫描系统音频设备")
+        self.lbl_status = tk.Label(options, textvariable=self.status_var,
+                                   bg=BG_CARD, fg=TEXT_SECONDARY,
+                                   font=("Microsoft YaHei", 9))
+        self.lbl_status.pack(side=tk.RIGHT)
+
+        signal_card = tk.Frame(monitor, bg=BG_CARD, width=350,
+                               highlightbackground=BORDER, highlightthickness=1)
+        signal_card.pack(side=tk.RIGHT, fill=tk.BOTH)
+        signal_card.pack_propagate(False)
+        signal_top = tk.Frame(signal_card, bg=BG_CARD)
+        signal_top.pack(fill=tk.X, padx=16, pady=(12, 0))
+        tk.Label(signal_top, text="SESSION TIMER", bg=BG_CARD, fg=ACCENT,
+                 font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+        tk.Label(signal_top, text="SIGNAL", bg=BG_CARD, fg=GREEN,
+                 font=("Segoe UI", 8, "bold")).pack(side=tk.RIGHT)
+        self.time_var = tk.StringVar(value="00:00")
+        self.timer_canvas = tk.Canvas(signal_card, width=330, height=72,
+                                      bg=BG_CARD, highlightthickness=0)
+        self.timer_canvas.pack(fill=tk.X, padx=10)
+        self._timer_bg = BG_CARD
+        self._timer_fg = ACCENT
+        self._timer_tx1, self._timer_ty1 = 6, 5
+        self._timer_tx2, self._timer_ty2 = 324, 67
+        self._timer_r = 8
+        self._timer_text_id = None
+        self._draw_timer()
+        self._timer_sync_job = None
+        self._sync_timer()
+
+        controls = tk.Frame(body, bg=BG_MAIN)
+        controls.pack(fill=tk.X, pady=(0, 12))
+        self.btn_start = RoundedButton(controls, text="开始记录", command=self._start,
+                                       bg_color=BTN_PRIMARY, hover_color=BTN_PRIMARY_HOVER,
+                                       font=("Microsoft YaHei", 10, "bold"),
+                                       width=148, height=40, radius=8, particle=True)
+        self.btn_start.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_pause = RoundedButton(controls, text="暂停", command=self._pause,
+                                       bg_color=BTN_WARN, hover_color=BTN_WARN_HOVER,
+                                       font=("Microsoft YaHei", 10), width=104,
+                                       height=40, radius=8, particle=True, state="disabled")
+        self.btn_pause.pack(side=tk.LEFT, padx=4)
+        self.btn_stop = RoundedButton(controls, text="结束并保存", command=self._stop,
+                                      bg_color=BTN_DANGER, hover_color=BTN_DANGER_HOVER,
+                                      font=("Microsoft YaHei", 10), width=126,
+                                      height=40, radius=8, particle=True, state="disabled")
+        self.btn_stop.pack(side=tk.LEFT, padx=4)
+        self.btn_history = RoundedButton(controls, text="历史记录", command=self._open_history,
+                                         bg_color=BTN_DARK, hover_color=BTN_DARK_HOVER,
+                                         fg_color=TEXT_PRIMARY, font=("Microsoft YaHei", 10),
+                                         width=110, height=40, radius=8, particle=False)
+        self.btn_history.pack(side=tk.LEFT, padx=4)
+
+        card_text = tk.Frame(body, bg=BG_CARD,
+                             highlightbackground=BORDER, highlightthickness=1)
+        card_text.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        info_row = tk.Frame(card_text, bg=BG_CARD)
+        info_row.pack(fill=tk.X, padx=16, pady=12)
+        title_group = tk.Frame(info_row, bg=BG_CARD)
+        title_group.pack(side=tk.LEFT)
+        tk.Label(title_group, text="TRANSCRIPT STREAM", bg=BG_CARD, fg=ACCENT,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Label(title_group, text="实时文字", bg=BG_CARD, fg=TEXT_PRIMARY,
+                 font=("Microsoft YaHei", 13, "bold")).pack(anchor="w", pady=(2, 0))
+        self.seg_count_var = tk.StringVar(value="已识别 0 段")
+        tk.Label(info_row, textvariable=self.seg_count_var, bg=BG_CARD,
+                 fg=TEXT_MUTED, font=("Microsoft YaHei", 9)).pack(side=tk.RIGHT)
+        txt_frame = tk.Frame(card_text, bg=BG_TEXT,
+                             highlightbackground=BORDER, highlightthickness=1)
+        txt_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        self.txt = tk.Text(txt_frame, wrap=tk.WORD, height=12,
+                           font=("Microsoft YaHei", 11),
+                           bg=BG_TEXT, fg=TEXT_PRIMARY, relief="flat", borderwidth=0,
+                           padx=18, pady=15, selectbackground="#1e4c67",
+                           selectforeground=TEXT_PRIMARY, insertbackground=ACCENT)
+        self.txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.txt.config(state=tk.DISABLED)
+        txt_scroll = ttk.Scrollbar(txt_frame, command=self.txt.yview)
+        txt_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.txt.configure(yscrollcommand=txt_scroll.set)
+        self.txt.tag_config("ts", foreground=TEXT_MUTED, font=("Consolas", 9))
+        self.txt.tag_config("txt", foreground=TEXT_PRIMARY,
+                            font=("Microsoft YaHei", 11), spacing1=5, spacing3=5)
+        self.txt.tag_config("info", foreground=TEXT_SECONDARY,
+                            font=("Microsoft YaHei", 9))
+        self.txt.tag_config("system", foreground=ACCENT,
+                            font=("Microsoft YaHei", 9))
+
+        footer = tk.Frame(body, bg=BG_FOOTER, height=30)
+        footer.pack(fill=tk.X)
+        footer.pack_propagate(False)
+        self.path_var = tk.StringVar(value="记录将安全保存在本机 transcripts 文件夹")
+        tk.Label(footer, textvariable=self.path_var, bg=BG_FOOTER, fg=TEXT_MUTED,
+                 font=("Microsoft YaHei", 8)).pack(side=tk.LEFT, padx=12, pady=6)
+        self.progress = ttk.Progressbar(footer, mode="indeterminate", length=120)
 
     def _log(self, msg, tag="info"):
         self.txt.config(state=tk.NORMAL)
