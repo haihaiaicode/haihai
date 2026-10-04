@@ -6,6 +6,7 @@ on:
     paths:
       - 'speech-to-text/main.py'
       - 'speech-to-text/requirements.txt'
+      - 'speech-to-text/installer.iss'
       - '.github/workflows/build-windows.yml'
 
 permissions:
@@ -26,7 +27,12 @@ jobs:
         run: python -m pip install -r requirements.txt pyinstaller
       - name: Build executable
         run: pyinstaller --noconfirm --clean --onefile --windowed --name MeetingRecorder main.py
-      - name: Package desktop app
+      - name: Build installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer.iss
+      - name: Package portable files
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release | Out-Null
@@ -36,5 +42,9 @@ jobs:
           Compress-Archive -Path release/* -DestinationPath MeetingRecorder-Windows.zip
       - uses: actions/upload-artifact@v4
         with:
-          name: MeetingRecorder-Windows
+          name: MeetingRecorder-Setup
+          path: speech-to-text/installer/MeetingRecorder-Setup.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeetingRecorder-Portable
           path: speech-to-text/MeetingRecorder-Windows.zip
