@@ -4,3 +4,7 @@ speech-to-text/.pytest_cache/
 speech-to-text/transcripts/
 *.pyc
 *.part
+speech-to-text/build/
+speech-to-text/dist/
+speech-to-text/installer/
+speech-to-text/*.spec
