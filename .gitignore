@@ -1,0 +1,6 @@
+speech-to-text/venv/
+speech-to-text/__pycache__/
+speech-to-text/.pytest_cache/
+speech-to-text/transcripts/
+*.pyc
+*.part

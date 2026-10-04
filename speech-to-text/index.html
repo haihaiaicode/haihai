@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="浏览器会议记录工具：实时语音转文字，记录保存在本机浏览器中。">
+  <title>会议记录工具</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">▤</span><div><strong>会议记录工具</strong><small>Browser meeting notes</small></div></div>
+    <div class="top-actions"><button class="button subtle" id="importBtn">导入记录</button><button class="button primary" id="newBtn">＋ 新建会议</button><input id="importFile" type="file" accept="application/json" hidden></div>
+  </header>
+
+  <main class="layout">
+    <section class="workspace">
+      <div class="page-heading"><div><p class="eyebrow">LIVE TRANSCRIPTION</p><h1 id="meetingTitle" contenteditable="true" spellcheck="false">未命名会议</h1><p class="hint">点击标题可以修改会议名称</p></div><span class="status-pill idle" id="statusPill"><i></i><span id="statusText">准备就绪</span></span></div>
+      <div class="timer" id="timer">00:00:00</div>
+      <div class="controls"><button class="button primary large" id="startBtn">● 开始记录</button><button class="button warning large" id="pauseBtn" disabled>Ⅱ 暂停</button><button class="button danger large" id="stopBtn" disabled>■ 结束并保存</button></div>
+      <div class="notice" id="browserNotice">首次使用时，浏览器会请求麦克风权限。推荐使用最新版 Chrome 或 Edge。</div>
+      <div class="transcript-panel"><div class="panel-heading"><div><h2>实时文字</h2><span id="wordCount">0 字</span></div><button class="icon-button" id="clearTextBtn" title="清空当前文字">⌫</button></div><div class="transcript" id="transcript"><div class="empty-state"><span>◌</span><p>点击“开始记录”，这里会显示实时转写内容</p></div></div></div>
+    </section>
+
+    <aside class="sidebar"><div class="side-heading"><div><p class="eyebrow">ARCHIVE</p><h2>历史记录</h2></div><span class="count" id="historyCount">0</span></div><div class="search"><span>⌕</span><input id="searchInput" type="search" placeholder="搜索会议记录"></div><div class="history-list" id="historyList"><div class="history-empty">还没有保存的会议</div></div><div class="storage-note">记录保存在当前浏览器的本地存储中，不会上传到服务器。</div></aside>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
