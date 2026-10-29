@@ -36,18 +36,26 @@ from datetime import datetime
 from collections import deque
 
 import numpy as np
+from scipy.signal import resample_poly
+from math import gcd
 import sounddevice as sd
+import soundcard as sc
 
 # ============================================================
 # 配置
 # ============================================================
 SAMPLE_RATE = 16000
-CHUNK_DURATION = 120.0          # 连续说话 2 分钟强制分段（避免等太久看不到结果）
+CHUNK_DURATION = 5.0            # 连续说话时定期出结果，避免长时间没有文字
 SILENCE_THRESHOLD = 0.012       # RMS 能量阈值
 SILENCE_TIMEOUT = 0.8           # 静音 0.8s 认为说完一句话（自然断句）
 OVERLAP_DURATION = 1.0          # 强制分段时保留 1s 重叠，避免词语被切断
 MIN_SEGMENT_DURATION = 0.6      # 最短 0.6s 才识别（过滤噪音碎片）
-MODEL_SIZE = "medium"
+MODEL_SIZE = "small"
+MODEL_CHOICES = {
+    "低内存（base）": "base",
+    "均衡（small，推荐）": "small",
+    "高精度（medium，占用较高）": "medium",
+}
 DEVICE = "cpu"
 MAX_TRANSCRIBE_WORKERS = 1
 CPU_THREADS = 4
@@ -330,8 +338,25 @@ class RoundedButton(tk.Frame):
 # 音频设备
 # ============================================================
 def list_input_devices():
-    """列出所有可用的音频输入设备（优先系统音频环回设备）"""
+    """列出真正的系统输出环回和常规输入设备。"""
     result = []
+    # PortAudio/sounddevice 通常不把 WASAPI 输出环回暴露为输入设备。
+    # SoundCard 会明确列出输出端点对应的 loopback microphone。
+    try:
+        default_speaker = sc.default_speaker()
+        for mic in sc.all_microphones(include_loopback=True):
+            if not mic.isloopback:
+                continue
+            result.append({
+                "backend": "soundcard", "id": mic.id, "index": None,
+                "name": mic.name, "hostapi": "WASAPI loopback",
+                "is_wasapi": True, "channels": 2, "sample_rate": 48000,
+                "is_loopback": True, "is_mic": False,
+                "is_default_output": bool(default_speaker and mic.id == default_speaker.id),
+                "label": f"【系统音频 · WASAPI 环回】 {mic.name}",
+            })
+    except Exception:
+        pass
     try:
         host_apis = sd.query_hostapis()
     except Exception:
@@ -376,6 +401,7 @@ def list_input_devices():
             device_type = "【其他】    "
 
         result.append({
+            "backend": "sounddevice",
             "index": idx,
             "name": name,
             "hostapi": hostapi_name,
@@ -394,6 +420,9 @@ def pick_best_device(devices):
     if not devices:
         return None
     # 1) 优先选 WASAPI 环回设备（Windows 上最可靠的系统音频捕获方式）
+    for d in devices:
+        if d["is_loopback"] and d.get("is_default_output"):
+            return d
     for d in devices:
         if d["is_loopback"] and d.get("is_wasapi"):
             return d
@@ -453,17 +482,14 @@ class VAD:
 # 音频工具
 # ============================================================
 def resample_audio(audio, orig_sr, target_sr):
-    """线性插值重采样（无需 scipy）"""
+    """带抗混叠滤波的重采样，供 16 kHz Whisper 输入使用。"""
     if orig_sr == target_sr:
         return audio
     audio = np.asarray(audio, dtype=np.float32)
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
-    duration = len(audio) / orig_sr
-    target_len = int(duration * target_sr)
-    x_orig = np.linspace(0, duration, len(audio))
-    x_target = np.linspace(0, duration, target_len)
-    return np.interp(x_target, x_orig, audio).astype(np.float32)
+    divisor = gcd(orig_sr, target_sr)
+    return resample_poly(audio, target_sr // divisor, orig_sr // divisor).astype(np.float32)
 
 
 # ============================================================
@@ -663,7 +689,7 @@ class Transcriber:
                     snapshot_dir,
                     device=self.device,
                     compute_type=compute,
-                    num_workers=2,
+                    num_workers=1,
                     cpu_threads=CPU_THREADS,
                 )
                 self.loaded = True
@@ -676,14 +702,14 @@ class Transcriber:
                     model_path,
                     device=self.device,
                     compute_type=compute,
-                    num_workers=2,
+                    num_workers=1,
                     cpu_threads=CPU_THREADS,
                 )
                 self.loaded = True
             except Exception as e:
                 raise RuntimeError(f"模型下载失败: {e}")
 
-    def transcribe(self, audio, language="zh"):
+    def transcribe(self, audio, language="zh", skip_initial_seconds=0.0):
         """
         转录音频。
         返回 (text: str, error: str|None)
@@ -708,6 +734,7 @@ class Transcriber:
                 beam_size=3,
                 best_of=3,
                 vad_filter=True,
+                word_timestamps=skip_initial_seconds > 0,
                 initial_prompt=prompt,
                 vad_parameters=dict(
                     threshold=0.5,
@@ -715,7 +742,18 @@ class Transcriber:
                     min_silence_duration_ms=300,
                 ),
             )
-            parts = [seg.text.strip() for seg in segments if seg.text and seg.text.strip()]
+            parts = []
+            for seg in segments:
+                if skip_initial_seconds > 0 and seg.words:
+                    # 强制分段的重叠音频只用于保留上下文，不再输出已转写的词。
+                    part = "".join(word.word for word in seg.words
+                                   if (word.start + word.end) / 2 >= skip_initial_seconds).strip()
+                elif seg.end > skip_initial_seconds:
+                    part = seg.text.strip()
+                else:
+                    part = ""
+                if part:
+                    parts.append(part)
             text = " ".join(parts)
 
             # 后处理：繁体→简体（zhconv 兜底）
@@ -776,17 +814,24 @@ class App:
 
         # -- 队列 --
         # Keep captured audio queued while Whisper catches up; never silently drop it.
-        self.audio_q = queue.Queue()
+        self.audio_q = queue.Queue(maxsize=300)  # 100 ms/帧，最多缓存约 30 秒原始音频
         self.result_q = queue.Queue()
         self.transcribe_q = queue.Queue()
+        self._pending_audio_bytes = 0
+        self._pending_audio_lock = threading.Lock()
+        self._max_pending_audio_bytes = 16 * 1024 * 1024
 
         # -- 缓冲 --
         self.speech_buf = deque()
+        self.pre_speech_buf = deque(maxlen=2)
+        self._next_overlap_seconds = 0.0
+        self.recognition_language = "zh"
         self.vad = VAD()
         self.transcriber = Transcriber()
 
         # -- 转录并发控制 --
         self._finalize_pending = False
+        self._closing = False
         self._transcribe_thread = threading.Thread(target=self._transcribe_loop, daemon=True)
         self._transcribe_thread.start()
 
@@ -801,6 +846,7 @@ class App:
         # -- 线程控制 --
         self._stop_flag = threading.Event()
         self._proc_thread: threading.Thread | None = None
+        self._capture_thread: threading.Thread | None = None
         self._start_time = 0.0
 
         # -- 样式 --
@@ -1110,6 +1156,16 @@ class App:
                                    font=("Microsoft YaHei", 9))
         self.lbl_status.pack(side=tk.RIGHT)
 
+        model_row = tk.Frame(device_inner, bg=BG_CARD)
+        model_row.pack(fill=tk.X)
+        tk.Label(model_row, text="识别模型", bg=BG_CARD, fg=TEXT_SECONDARY,
+                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
+        self.model_var = tk.StringVar(value="均衡（small，推荐）")
+        self.cb_model = ttk.Combobox(model_row, width=26, textvariable=self.model_var,
+                                     values=list(MODEL_CHOICES), state="readonly",
+                                     font=("Microsoft YaHei", 9))
+        self.cb_model.pack(side=tk.LEFT, padx=(8, 0))
+
         signal_card = tk.Frame(monitor, bg=BG_CARD, width=350,
                                highlightbackground=BORDER, highlightthickness=1)
         signal_card.pack(side=tk.RIGHT, fill=tk.BOTH)
@@ -1290,6 +1346,13 @@ class App:
         self.full_text = ""
         self.segments.clear()
         self.speech_buf.clear()
+        self.pre_speech_buf.clear()
+        self._next_overlap_seconds = 0.0
+        lang_raw = self.lang_var.get()
+        self.recognition_language = "zh" if "zh" in lang_raw else ("en" if "en" in lang_raw else "auto")
+        model_size = MODEL_CHOICES[self.model_var.get()]
+        if self.transcriber.model_size != model_size:
+            self.transcriber = Transcriber(model_size=model_size)
         self.vad.reset()
 
         self.txt.config(state=tk.NORMAL)
@@ -1303,6 +1366,7 @@ class App:
         self.btn_stop.config(state="normal")
         self.cb_device.config(state="disabled")
         self.cb_lang.config(state="disabled")
+        self.cb_model.config(state="disabled")
         self.btn_refresh.config(state="disabled")
 
         self._set_status("正在加载语音识别模型…", BTN_PRIMARY, BTN_PRIMARY)
@@ -1323,6 +1387,10 @@ class App:
         self.root.after(0, self._on_loaded)
 
     def _on_loaded(self):
+        if not self.recording:
+            self.progress.stop()
+            self.progress.pack_forget()
+            return
         self.progress.stop()
         self.progress.pack_forget()
 
@@ -1339,7 +1407,18 @@ class App:
         block = int(self.audio_sr * 0.1)  # 100ms per block
         self.vad.configure(self.audio_sr, block)
 
-        # 打开音频流（先验证设备是否仍然有效）
+        # 真正的 WASAPI 输出环回由 SoundCard 读取；设备列表里的普通输入仍用 sounddevice。
+        if self.selected.get("backend") == "soundcard":
+            self._capture_thread = threading.Thread(target=self._capture_loopback, daemon=True)
+            self._proc_thread = threading.Thread(target=self._process_loop, daemon=True)
+            self._capture_thread.start()
+            self._proc_thread.start()
+            self._start_time = time.time()
+            self._tick()
+            self._log(f"✅ 模型就绪 — 系统音频(WASAPI 环回) | 采样率: {self.audio_sr}Hz", "system")
+            return
+
+        # 打开普通音频输入流（先验证设备是否仍然有效）
         last_err = None
         target_name = self.selected.get("name", "")
         devices_to_try = [self.selected["index"]]  # 首选当前设备
@@ -1403,14 +1482,14 @@ class App:
                 devices_to_try = []
                 # 先按名称匹配原设备
                 for d in self.devices:
-                    if d["name"] == target_name:
+                    if d.get("backend") == "sounddevice" and d["name"] == target_name:
                         devices_to_try.append(d["index"])
                 # 再把所有设备都加上
                 for d in self.devices:
-                    if d["index"] not in devices_to_try:
+                    if d.get("backend") == "sounddevice" and d["index"] not in devices_to_try:
                         devices_to_try.append(d["index"])
                 if devices_to_try:
-                    self.selected = self.devices[0]
+                    self.selected = next(d for d in self.devices if d.get("backend") == "sounddevice" and d["index"] == devices_to_try[0])
                     self.audio_sr = int(self.selected.get("sample_rate", SAMPLE_RATE))
                     block = int(self.audio_sr * 0.1)
                     self.vad.configure(self.audio_sr, block)
@@ -1423,6 +1502,7 @@ class App:
             self.btn_stop.config(state="disabled")
             self.cb_device.config(state="readonly")
             self.cb_lang.config(state="readonly")
+            self.cb_model.config(state="readonly")
             self.btn_refresh.config(state="normal")
             self.recording = False
             self._set_timer_style(BG_TIMER, ACCENT)
@@ -1442,11 +1522,15 @@ class App:
         self._log("")
 
     def _on_load_error(self, msg):
+        if not self.recording:
+            return
         self.progress.stop()
         self.progress.pack_forget()
         self.recording = False
         self.btn_start.config(state="normal", bg=BTN_PRIMARY)
         self.cb_device.config(state="readonly")
+        self.cb_lang.config(state="readonly")
+        self.cb_model.config(state="readonly")
         self.btn_refresh.config(state="normal")
         self._set_status("模型加载失败", RED, RED)
         messagebox.showerror("加载失败",
@@ -1482,61 +1566,100 @@ class App:
                 pass
             self.stream = None
 
+        if self._capture_thread and self._capture_thread.is_alive():
+            self._capture_thread.join(timeout=3)
+
         # 等处理线程
         if self._proc_thread and self._proc_thread.is_alive():
             self._proc_thread.join(timeout=10)
 
         # 处理残余
         if self.speech_buf:
-            self._flush_buffer()
+            self._flush_buffer(reason="stop")
 
         # 等一下最后的转录完成
         self._finalize_pending = True
 
-        self.btn_start.config(state="normal", bg=BTN_PRIMARY)
+        self.btn_start.config(state="disabled", bg=BTN_PRIMARY)
         self.btn_pause.config(state="disabled", text="⏸  暂停",
                               bg=BTN_WARN)
         self.btn_stop.config(state="disabled")
         self.cb_device.config(state="readonly")
         self.cb_lang.config(state="readonly")
+        self.cb_model.config(state="readonly")
         self.btn_refresh.config(state="normal")
 
-        self._set_status(f"已停止 — 共识别 {self.segment_count} 段")
+        self._set_status("正在完成最后的转写…")
         self._set_timer_style(BG_TIMER, ACCENT)
         self.time_var.set("00:00")
-        self.seg_count_var.set(f"共识别 {self.segment_count} 段")
-        self._log(f"\n✅ 录制完成 — 共 {self.segment_count} 段文字", "system")
+        self.seg_count_var.set(f"已识别 {self.segment_count} 段")
+        self._log("⏳ 正在完成最后的转写…", "system")
         self._log(f"📁 文件保存在: {self.session_dir}", "system")
         self.path_var.set(f"📁 {self.session_dir}")
 
     # ==================== 音频 ====================
+    def _capture_loopback(self):
+        try:
+            mic = sc.get_microphone(id=self.selected["id"], include_loopback=True)
+            block = int(self.audio_sr * 0.1)
+            # Windows 上 SoundCard 的单声道 loopback 有已知问题，先读双声道再合成单声道。
+            with mic.recorder(samplerate=self.audio_sr, channels=2, blocksize=block) as recorder:
+                while not self._stop_flag.is_set():
+                    frames = recorder.record(numframes=block)
+                    if self.paused or frames.size == 0:
+                        continue
+                    mono = frames.mean(axis=1).astype(np.float32, copy=False)
+                    try:
+                        self.audio_q.put_nowait(mono)
+                    except queue.Full:
+                        self.result_q.put(("err", "音频处理跟不上，已跳过一小段声音", time.time()))
+        except Exception as exc:
+            if not self._stop_flag.is_set():
+                self.root.after(0, self._on_capture_error, str(exc))
+
+    def _on_capture_error(self, message):
+        self._log(f"⚠️ 系统音频捕获失败: {message}", "system")
+        if self.recording:
+            self._stop()
+
     def _audio_cb(self, indata, _frames, _ti, status):
         if status:
             print(f"[音频] {status}", file=sys.stderr)
         if self.paused:
             return
         try:
-            self.audio_q.put(indata[:, 0].copy())
+            self.audio_q.put_nowait(indata[:, 0].copy())
         except queue.Full:
-            pass  # 丢弃旧数据，防止积压
+            self.result_q.put(("err", "音频处理跟不上，已跳过一小段声音", time.time()))
 
     def _process_loop(self):
         while not self._stop_flag.is_set() or not self.audio_q.empty():
             try:
                 chunk = self.audio_q.get(timeout=0.4)
             except queue.Empty:
+                if self.paused and self.speech_buf:
+                    self._flush_buffer(reason="pause")
+                    self.vad.reset()
+                    self.pre_speech_buf.clear()
+                continue
+
+            if self.paused:
                 continue
 
             speaking = self.vad.process(chunk)
 
             if speaking:
+                if not self.speech_buf:
+                    self.speech_buf.extend(self.pre_speech_buf)
+                    self.pre_speech_buf.clear()
                 self.speech_buf.append(chunk)
             else:
                 # 停顿 → 自然断句，即刻识别
-                if self.speech_buf and not self.vad.is_speaking:
+                if self.speech_buf:
                     self._flush_buffer(reason="pause")
+                self.pre_speech_buf.append(chunk)
 
-            # 连续说话超过 2 分钟 → 强制分段（保留重叠，下半句归下一段）
+            # 连续说话定期分段，保留少量重叠供识别上下文使用。
             dur = sum(len(c) for c in self.speech_buf) / self.audio_sr
             if dur >= CHUNK_DURATION:
                 self._flush_buffer(reason="chunk")
@@ -1554,36 +1677,46 @@ class App:
         if dur < MIN_SEGMENT_DURATION:
             return
 
+        skip_initial_seconds = self._next_overlap_seconds
+        self._next_overlap_seconds = 0.0
+
         # 强制分段时保留 OVERLAP_DURATION 秒重叠到下一段（避免切断词语）
         if reason == "chunk":
             overlap_samples = int(self.audio_sr * OVERLAP_DURATION)
             if len(audio) > overlap_samples:
                 overlap = audio[-overlap_samples:].copy()
                 self.speech_buf.append(overlap)
+                self._next_overlap_seconds = len(overlap) / self.audio_sr
 
         # 重采样到 16kHz（Whisper 模型要求）
         audio_16k = resample_audio(audio, self.audio_sr, SAMPLE_RATE)
-
-        lang_raw = self.lang_var.get()
-        lang = "zh" if "zh" in lang_raw else ("en" if "en" in lang_raw else "auto")
 
         # 控制并发数
         if self.transcribe_q is None:
             return  # 太忙则跳过
 
-        self.transcribe_q.put((audio_16k.copy(), lang, time.time(), reason))
+        with self._pending_audio_lock:
+            if self._pending_audio_bytes + audio_16k.nbytes > self._max_pending_audio_bytes:
+                self.result_q.put(("err", "识别速度跟不上音频，已跳过一段；可选用低内存模型", time.time()))
+                return
+            self._pending_audio_bytes += audio_16k.nbytes
+        self.transcribe_q.put((audio_16k, self.recognition_language,
+                               time.time(), reason, skip_initial_seconds))
 
     def _transcribe_loop(self):
         while True:
-            audio, lang, cap_time, reason = self.transcribe_q.get()
+            audio, lang, cap_time, reason, skip_initial_seconds = self.transcribe_q.get()
             try:
-                self._do_transcribe(audio, lang, cap_time, reason)
+                self._do_transcribe(audio, lang, cap_time, reason, skip_initial_seconds)
             finally:
+                with self._pending_audio_lock:
+                    self._pending_audio_bytes -= audio.nbytes
                 self.transcribe_q.task_done()
 
-    def _do_transcribe(self, audio, lang, cap_time, reason="pause"):
+    def _do_transcribe(self, audio, lang, cap_time, reason="pause", skip_initial_seconds=0.0):
         try:
-            text, err = self.transcriber.transcribe(audio, language=lang)
+            text, err = self.transcriber.transcribe(
+                audio, language=lang, skip_initial_seconds=skip_initial_seconds)
             if err:
                 self.result_q.put(("err", err, cap_time))
             elif text:
@@ -1621,6 +1754,13 @@ class App:
                 and (not self._proc_thread or not self._proc_thread.is_alive())):
             self._save_final()
             self._finalize_pending = False
+            if self._closing:
+                self.root.destroy()
+                return
+            self.btn_start.config(state="normal", bg=BTN_PRIMARY)
+            self._set_status(f"已停止 — 共识别 {self.segment_count} 段")
+            self.seg_count_var.set(f"共识别 {self.segment_count} 段")
+            self._log(f"✅ 录制完成 — 共 {self.segment_count} 段文字", "system")
         self.root.after(200, self._poll_results)
 
     def _write_line(self, ts, text):
@@ -1708,8 +1848,11 @@ class App:
         if self.recording:
             ok = messagebox.askyesno("确认", "正在录制中，确定停止并退出吗？")
             if ok:
+                self._closing = True
                 self._stop()
-                self.root.destroy()
+        elif self._finalize_pending:
+            self._closing = True
+            self._set_status("正在保存最后的转写，完成后退出…")
         else:
             self.root.destroy()
 

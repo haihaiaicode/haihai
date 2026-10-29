@@ -3,6 +3,8 @@ name: Build Windows desktop app
 on:
   workflow_dispatch:
   push:
+    tags:
+      - 'v*'
     paths:
       - 'speech-to-text/main.py'
       - 'speech-to-text/app-icon.ico'
@@ -11,7 +13,7 @@ on:
       - '.github/workflows/build-windows.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -27,7 +29,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pyinstaller
       - name: Build executable
-        run: pyinstaller --noconfirm --clean --onefile --windowed --icon app-icon.ico --collect-data faster_whisper --collect-data zhconv --name MeetingRecorder main.py
+        run: pyinstaller --noconfirm --clean --onefile --windowed --icon app-icon.ico --collect-data faster_whisper --collect-data zhconv --collect-all soundcard --name MeetingRecorder main.py
       - name: Build installer
         shell: pwsh
         run: |
@@ -37,3 +39,9 @@ jobs:
         with:
           name: MeetingRecorder-Setup
           path: speech-to-text/installer/MeetingRecorder-Setup.exe
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: speech-to-text/installer/MeetingRecorder-Setup.exe
+          generate_release_notes: true
